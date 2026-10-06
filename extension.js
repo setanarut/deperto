@@ -9,7 +9,7 @@ export default class ZoomByScrollExtension extends Extension {
         console.log("[Deperto] Enabling extension - Direct Magnifier Mode");
 
         this._settings = this.getSettings();
-        
+
         // 1. Configure Window Manager (Force Super as modifier to free up Alt)
         this._wmSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.preferences' });
         this._originalWmModifier = this._wmSettings.get_string('mouse-button-modifier');
@@ -21,13 +21,65 @@ export default class ZoomByScrollExtension extends Extension {
 
         // 3. Internal State
         this._currentZoom = 1.0;
-        
+
         // 4. Capture Events
         this._stageSignalId = global.stage.connect('captured-event', this._onCapturedEvent.bind(this));
     }
 
+    _normalizeModifierString(spec) {
+        const raw = String(spec || 'alt+super').trim().toLowerCase();
+        if (!raw) {
+            return 'alt+super';
+        }
+
+        const aliases = {
+            'windows': 'super',
+            'super': 'super',
+            'meta': 'super',
+            'cmd': 'super',
+            'ctrl': 'ctrl',
+            'control': 'ctrl',
+            'alt': 'alt',
+            'shift': 'shift',
+            'super-alt': 'alt+super',
+            'alt-super': 'alt+super',
+            'ctrl-super': 'ctrl+super',
+        };
+
+        const normalized = raw
+            .replace(/[_\s-]+/g, '+')
+            .replace(/\++/g, '+')
+            .replace(/^\+|\+$/g, '')
+            .split('+')
+            .map(token => aliases[token] || token)
+            .filter(Boolean);
+
+        const unique = [];
+        normalized.forEach(token => {
+            if (!unique.includes(token)) {
+                unique.push(token);
+            }
+        });
+
+        return unique.length ? unique.sort().join('+') : 'alt+super';
+    }
+
+    _matchesModifierCombination(state, modifierSpec) {
+        const normalized = this._normalizeModifierString(modifierSpec);
+        const parts = normalized.split('+');
+
+        const has = {
+            super: (state & Clutter.ModifierType.MOD4_MASK) !== 0,
+            alt: (state & Clutter.ModifierType.MOD1_MASK) !== 0,
+            ctrl: (state & Clutter.ModifierType.CONTROL_MASK) !== 0,
+            shift: (state & Clutter.ModifierType.SHIFT_MASK) !== 0,
+        };
+
+        return parts.every(part => !!has[part]);
+    }
+
     _updateSettings() {
-        this._modifierKey = this._settings.get_string('modifier-key');
+        this._modifierKey = this._normalizeModifierString(this._settings.get_string('modifier-key'));
         this._zoomStep = this._settings.get_double('zoom-step');
         this._smoothZoom = this._settings.get_boolean('smooth-zoom');
     }
@@ -59,7 +111,7 @@ export default class ZoomByScrollExtension extends Extension {
         if (this._currentZoom > 1.0) {
             this._applyZoom(1.0);
         }
-        
+
         this._settings = null;
     }
 
@@ -70,21 +122,7 @@ export default class ZoomByScrollExtension extends Extension {
         }
 
         const state = event.get_state();
-        const selectedModifier = this._modifierKey;
-        
-        const hasSuper = (state & Clutter.ModifierType.MOD4_MASK) !== 0;
-        const hasAlt = (state & Clutter.ModifierType.MOD1_MASK) !== 0;
-        const hasCtrl = (state & Clutter.ModifierType.CONTROL_MASK) !== 0;
-
-        let match = false;
-
-        // Check for specific combinations: Super+Alt or Super+Ctrl
-        if (selectedModifier === 'ctrl-super') {
-            match = hasCtrl && hasSuper;
-        } else {
-            // Default: super-alt
-            match = hasSuper && hasAlt;
-        }
+        const match = this._matchesModifierCombination(state, this._modifierKey);
 
         // If not the exact combination, let the system handle it
         if (!match) {
@@ -98,7 +136,7 @@ export default class ZoomByScrollExtension extends Extension {
 
         if (direction === Clutter.ScrollDirection.SMOOTH) {
             const [dx, dy] = event.get_scroll_delta();
-            zoomChange = -dy * ZOOM_STEP; 
+            zoomChange = -dy * ZOOM_STEP;
         }
 
         if (Math.abs(zoomChange) < 0.001) return Clutter.EVENT_STOP;
@@ -157,7 +195,7 @@ export default class ZoomByScrollExtension extends Extension {
                 redoCursorTracking: true,
                 animate: this._smoothZoom,
             });
-            
+
             // Ensure proportional tracking so it follows the mouse
             if (region.getMouseTrackingMode() !== GDesktopEnums.MagnifierMouseTrackingMode.PROPORTIONAL) {
                 region.setMouseTrackingMode(GDesktopEnums.MagnifierMouseTrackingMode.PROPORTIONAL);
